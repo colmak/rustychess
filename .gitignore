@@ -1,0 +1,15 @@
+# Rust specific ignores
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDEs and editors
+/.idea
+/.vscode
+*.swp
+*~
+*.bak
+
+# Operating system specific files
+.DS_Store
+Thumbs.db

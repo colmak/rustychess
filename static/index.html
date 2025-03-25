@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RustyChess UI</title>
+    <link rel="stylesheet" href="css/chessboard-1.0.0.min.css" />
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="js/chessboard-1.0.0.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .game-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin-top: 20px;
+      }
+      .board-container {
+        margin: 20px 0;
+      }
+      .controls {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .status {
+        margin-top: 10px;
+        padding: 10px;
+        min-height: 1.5em;
+        border: 1px solid #ddd;
+        width: 400px;
+        text-align: center;
+      }
+      button {
+        padding: 8px 16px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      button#suggestMoveBtn {
+        background-color: #2196f3;
+      }
+      button#suggestMoveBtn:hover {
+        background-color: #0b7dda;
+      }
+      .move-history {
+        margin-top: 20px;
+        max-height: 200px;
+        overflow-y: auto;
+        width: 400px;
+        border: 1px solid #ddd;
+        padding: 10px;
+      }
+      .suggestion {
+        color: #2196f3;
+        font-weight: bold;
+      }
+      .arrow {
+        position: absolute;
+        pointer-events: none;
+        opacity: 0.7;
+        z-index: 1000;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>RustyChess UI</h1>
+
+    <div class="controls">
+      <button id="newGameBtn">New Game</button>
+      <button id="suggestMoveBtn" disabled>Suggest Best Move</button>
+    </div>
+
+    <div class="game-container">
+      <div class="status" id="status">
+        No active game. Click "New Game" to start.
+      </div>
+      <div id="board" class="board-container" style="width: 400px"></div>
+      <div class="move-history">
+        <h3>Move History</h3>
+        <ul id="moveList"></ul>
+      </div>
+    </div>
+
+    <script>
+      let board = null;
+      let game = null;
+      let gameId = null;
+      let currentTurn = "w";
+      let arrowElement = null;
+
+      // Initialize the board with starting position
+      function initializeBoard() {
+        board = Chessboard("board", {
+          position: "start",
+          draggable: true,
+          onDragStart: onDragStart,
+          onDrop: onDrop,
+        });
+      }
+
+      // Prevent dragging pieces when it's not your turn or game is over
+      function onDragStart(source, piece) {
+        // Only allow white pieces to be moved
+        if (piece.search(/^b/) !== -1) {
+          return false;
+        }
+
+        // Don't allow moves if there's no active game
+        if (!gameId) {
+          return false;
+        }
+
+        // Only allow the right color to move
+        if (
+          (currentTurn === "w" && piece.search(/^b/) !== -1) ||
+          (currentTurn === "b" && piece.search(/^w/) !== -1)
+        ) {
+          return false;
+        }
+      }
+
+      // Handle the piece drop
+      function onDrop(source, target) {
+        // Check if the move is valid
+        if (source === target) {
+          return "snapback";
+        }
+
+        // Make API call to make the move
+        makeMove(source, target);
+      }
+
+      // Create a new game
+      async function createNewGame() {
+        try {
+          const response = await fetch("/api/games", {
+            method: "POST",
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to create new game");
+          }
+
+          const data = await response.json();
+          gameId = data.id;
+          game = data.game;
+          currentTurn = "w"; // White starts
+
+          // Reset the board
+          board.position("start");
+
+          // Clear move history
+          document.getElementById("moveList").innerHTML = "";
+
+          // Update status
+          document.getElementById(
+            "status"
+          ).textContent = `Game ID: ${gameId} - White's turn`;
+
+          // Enable the suggest move button
+          document.getElementById("suggestMoveBtn").disabled = false;
+
+          // Remove any existing arrow
+          removeArrow();
+
+          return data;
+        } catch (error) {
+          console.error("Error creating new game:", error);
+          document.getElementById(
+            "status"
+          ).textContent = `Error: ${error.message}`;
+        }
+      }
+
+      // Make a move
+      async function makeMove(from, to) {
+        try {
+          const response = await fetch(`/api/games/${gameId}/moves`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from: from,
+              to: to,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Invalid move: ${errorText}`);
+          }
+
+          const data = await response.json();
+          game = data;
+
+          // Update move history
+          const moveItem = document.createElement("li");
+          moveItem.textContent = `${from} → ${to}`;
+          document.getElementById("moveList").appendChild(moveItem);
+
+          // Switch turns
+          currentTurn = currentTurn === "w" ? "b" : "w";
+
+          // Update status
+          document.getElementById(
+            "status"
+          ).textContent = `Game ID: ${gameId} - ${
+            currentTurn === "w" ? "White" : "Black"
+          }'s turn`;
+
+          // Remove any existing arrow
+          removeArrow();
+
+          // If it's now black's turn, make an engine move for black
+          if (currentTurn === "b") {
+            setTimeout(makeEngineMove, 500);
+          }
+
+          return true;
+        } catch (error) {
+          console.error("Error making move:", error);
+          document.getElementById(
+            "status"
+          ).textContent = `Error: ${error.message}`;
+          return "snapback";
+        }
+      }
+
+      // Make an engine move for black
+      async function makeEngineMove() {
+        try {
+          // Update status
+          document.getElementById("status").textContent = `Thinking...`;
+
+          // Get best move from engine
+          const response = await fetch(`/api/games/${gameId}/best-move`);
+          if (!response.ok) {
+            throw new Error("Failed to get best move");
+          }
+
+          const bestMove = await response.json();
+          console.log("Engine suggested move:", bestMove);
+
+          // Make the move
+          const moveResponse = await fetch(`/api/games/${gameId}/moves`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from: bestMove.from,
+              to: bestMove.to,
+            }),
+          });
+
+          if (!moveResponse.ok) {
+            throw new Error("Failed to make engine move");
+          }
+
+          const moveData = await moveResponse.json();
+
+          // Get the current position and properly update it
+          const currentPosition = board.position();
+
+          // Create a new position object
+          const newPosition = { ...currentPosition };
+
+          // Move the piece (add to destination, remove from source)
+          newPosition[bestMove.to] = newPosition[bestMove.from];
+          delete newPosition[bestMove.from];
+
+          // Update the board with the new position
+          board.position(newPosition, true);
+
+          // Update move history with engine move
+          const moveItem = document.createElement("li");
+          moveItem.textContent = `${bestMove.from} → ${bestMove.to} (Engine)`;
+          document.getElementById("moveList").appendChild(moveItem);
+
+          // Switch turns back to white
+          currentTurn = "w";
+
+          // Update status
+          document.getElementById(
+            "status"
+          ).textContent = `Game ID: ${gameId} - White's turn`;
+        } catch (error) {
+          console.error("Error making engine move:", error);
+          document.getElementById(
+            "status"
+          ).textContent = `Error: ${error.message}`;
+        }
+      }
+
+      // Get the best move from the engine as a suggestion
+      async function suggestBestMove() {
+        try {
+          // Only suggest moves during white's turn
+          if (currentTurn !== "w" || !gameId) {
+            return;
+          }
+
+          // Update status
+          document.getElementById(
+            "status"
+          ).textContent = `Analyzing position...`;
+
+          // Get best move from engine
+          const response = await fetch(`/api/games/${gameId}/best-move`);
+          if (!response.ok) {
+            throw new Error("Failed to get best move");
+          }
+
+          const bestMove = await response.json();
+          console.log("Engine suggested move:", bestMove);
+
+          // Update status to show the suggestion
+          document.getElementById(
+            "status"
+          ).textContent = `Suggested move: ${bestMove.from} → ${bestMove.to} (Evaluation: ${bestMove.evaluation})`;
+
+          // Draw an arrow to indicate the suggested move
+          drawArrow(bestMove.from, bestMove.to);
+
+          // Add suggestion to move history
+          const moveItem = document.createElement("li");
+          moveItem.className = "suggestion";
+          moveItem.textContent = `Suggestion: ${bestMove.from} → ${bestMove.to}`;
+          document.getElementById("moveList").appendChild(moveItem);
+        } catch (error) {
+          console.error("Error getting best move:", error);
+          document.getElementById(
+            "status"
+          ).textContent = `Error: ${error.message}`;
+        }
+      }
+
+      // Create an arrow to indicate a move
+      function drawArrow(from, to) {
+        // Remove any existing arrow
+        removeArrow();
+
+        // Get position of squares
+        const boardElement = document.getElementById("board");
+        const boardRect = boardElement.getBoundingClientRect();
+        const squareSize = boardRect.width / 8;
+
+        // Calculate file and rank indices
+        const fileFrom = from.charCodeAt(0) - "a".charCodeAt(0);
+        const rankFrom = parseInt(from[1]) - 1;
+        const fileTo = to.charCodeAt(0) - "a".charCodeAt(0);
+        const rankTo = parseInt(to[1]) - 1;
+
+        // Calculate center coordinates (board is flipped in UI)
+        const xFrom = boardRect.left + fileFrom * squareSize + squareSize / 2;
+        const yFrom =
+          boardRect.top + (7 - rankFrom) * squareSize + squareSize / 2;
+        const xTo = boardRect.left + fileTo * squareSize + squareSize / 2;
+        const yTo = boardRect.top + (7 - rankTo) * squareSize + squareSize / 2;
+
+        // Create arrow
+        const arrow = document.createElement("div");
+        arrow.className = "arrow";
+
+        // Calculate angle and length
+        const angle = Math.atan2(yTo - yFrom, xTo - xFrom);
+        const length = Math.sqrt(
+          Math.pow(xTo - xFrom, 2) + Math.pow(yTo - yFrom, 2)
+        );
+
+        // Style the arrow
+        arrow.style.width = `${length}px`;
+        arrow.style.height = "10px";
+        arrow.style.backgroundColor = "#2196F3";
+        arrow.style.position = "absolute";
+        arrow.style.left = `${xFrom}px`;
+        arrow.style.top = `${yFrom - 5}px`;
+        arrow.style.transformOrigin = "0 5px";
+        arrow.style.transform = `rotate(${angle}rad)`;
+        arrow.style.opacity = "0.7";
+        arrow.style.zIndex = "1000";
+
+        // Add arrow to document
+        document.body.appendChild(arrow);
+        arrowElement = arrow;
+      }
+
+      // Remove any existing arrow
+      function removeArrow() {
+        if (arrowElement) {
+          arrowElement.remove();
+          arrowElement = null;
+        }
+      }
+
+      // Event listeners
+      document
+        .getElementById("newGameBtn")
+        .addEventListener("click", createNewGame);
+
+      document
+        .getElementById("suggestMoveBtn")
+        .addEventListener("click", suggestBestMove);
+
+      // Initialize the board when the page loads
+      document.addEventListener("DOMContentLoaded", initializeBoard);
+    </script>
+  </body>
+</html>
