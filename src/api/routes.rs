@@ -1,5 +1,6 @@
 use actix_web::{get, post, web, HttpResponse, Responder};
 use serde::{Serialize, Deserialize};
+use serde_json::json;  // Added this import for the json! macro
 use std::sync::Mutex;
 use std::collections::HashMap;
 use uuid::Uuid;
