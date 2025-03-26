@@ -2,6 +2,7 @@ use crate::chess::{Board, Position, Piece, PieceType, Color, Game};
 use crate::error::ChessError;
 use std::str::FromStr;
 use std::cmp;
+use serde::{Serialize, Deserialize};
 
 // Point values for each piece type (traditional chess values)
 const PAWN_VALUE: i32 = 100;
@@ -27,7 +28,7 @@ const KNIGHT_MOVES: [(i32, i32); 8] = [
     (1, 2), (1, -2), (-1, 2), (-1, -2),
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChessMove {
     pub from: Position,
     pub to: Position,
@@ -48,12 +49,42 @@ impl ChessMove {
     }
 }
 
+impl FromStr for ChessMove {
+    type Err = ChessError;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Format should be like "e2-e4" or "e2e4"
+        let s = s.trim();
+        
+        // Handle both formats with or without separator
+        let (from_str, to_str) = if s.contains('-') {
+            let parts: Vec<&str> = s.split('-').collect();
+            if parts.len() != 2 {
+                return Err(ChessError::InvalidMove(format!("Invalid move format: {}", s)));
+            }
+            (parts[0], parts[1])
+        } else if s.len() == 4 {
+            (&s[0..2], &s[2..4])
+        } else {
+            return Err(ChessError::InvalidMove(format!("Invalid move format: {}", s)));
+        };
+        
+        // Parse the positions
+        let from = Position::from_str(from_str)?;
+        let to = Position::from_str(to_str)?;
+        
+        Ok(ChessMove { from, to, score: 0 })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Engine {
     // Search depth for the minimax algorithm
     depth: u8,
     // Number of positions evaluated
     nodes_searched: u32,
     // Debug mode
+    #[serde(default)]
     debug: bool,
 }
 
@@ -62,8 +93,13 @@ impl Engine {
         Self {
             depth,
             nodes_searched: 0,
-            debug: true, // Turn on debug mode to help diagnose issues
+            debug: false, // Turn off debug mode by default
         }
+    }
+    
+    // Enable/disable debug mode
+    pub fn set_debug_mode(&mut self, debug: bool) {
+        self.debug = debug;
     }
     
     // Helper to print debug info
@@ -211,7 +247,8 @@ impl Engine {
     }
     
     // Generate all legal moves for a given position and player
-    fn generate_moves(&self, board: &Board, color: Color) -> Result<Vec<ChessMove>, ChessError> {
+    // Making this public so it can be called from Game
+    pub fn generate_moves(&self, board: &Board, color: Color) -> Result<Vec<ChessMove>, ChessError> {
         let mut moves = Vec::new();
         
         // Track what pieces we find for debugging
@@ -532,5 +569,10 @@ impl Engine {
     // Get statistics about the search
     pub fn get_stats(&self) -> (u32, u8) {
         (self.nodes_searched, self.depth)
+    }
+    
+    // Public method for getting legal moves - to be used by Game
+    pub fn get_legal_moves(&self, board: &Board, color: Color) -> Result<Vec<ChessMove>, ChessError> {
+        self.generate_moves(board, color)
     }
 }
