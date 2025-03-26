@@ -1,4 +1,4 @@
-use crate::chess::{Board, Position, Color, Piece, ChessMove};
+use crate::chess::{Board, Position, Color, Engine, ChessMove, PieceType};
 use crate::error::ChessError;
 use serde::{Serialize, Deserialize};
 use std::str::FromStr;
@@ -18,7 +18,7 @@ pub struct Game {
     pub current_turn: Color,
     pub status: GameStatus,
     pub move_history: Vec<String>,
-    pub engine: ChessEngine,
+    pub engine: Engine,
 }
 
 impl Game {
@@ -28,11 +28,16 @@ impl Game {
             current_turn: Color::White,
             status: GameStatus::InProgress,
             move_history: Vec::new(),
-            engine: ChessEngine::new(),
+            engine: Engine::new(3),  // Default depth of 3
         }
     }
     
-    pub fn make_move(&mut self, chess_move: ChessMove) -> Result<(), ChessError> {
+    pub fn make_move(&mut self, from_str: &str, to_str: &str) -> Result<(), ChessError> {
+        // Parse positions from strings
+        let from = Position::from_str(from_str)?;
+        let to = Position::from_str(to_str)?;
+        let chess_move = ChessMove::new(from, to);
+        
         // Validate that it's the correct player's turn
         let current_piece = self.board.get_piece(&chess_move.from)
             .ok_or(ChessError::InvalidMove("No piece at source position".into()))?;
@@ -41,26 +46,24 @@ impl Game {
             return Err(ChessError::InvalidMove("Not your turn".into()));
         }
 
-        // Get all legal moves and verify this is one of them
-        let legal_moves = self.engine.get_legal_moves(&self.board, self.current_turn)?;
-        if !legal_moves.contains(&chess_move) {
-            return Err(ChessError::InvalidMove("Illegal move".into()));
-        }
-
-        // Make the move
-        self.board.move_piece(chess_move)?;
+        // Make the move on the board
+        self.board.make_move(&chess_move.from, &chess_move.to)?;
+        
+        // Record the move
+        self.move_history.push(format!("{}-{}", from_str, to_str));
         
         // Switch turns
-        self.current_turn = match self.current_turn {
-            Color::White => Color::Black,
-            Color::Black => Color::White,
-        };
+        self.current_turn = self.current_turn.opposite();
+        
+        // Update game status
+        self.update_game_status();
 
         Ok(())
     }
 
     pub fn get_best_move(&self) -> Result<ChessMove, ChessError> {
-        self.engine.get_best_move(&self.board, self.current_turn)
+        let mut engine = Engine::new(3);
+        engine.find_best_move(self)
     }
     
     pub fn get_status(&self) -> GameStatus {
@@ -75,11 +78,14 @@ impl Game {
             for file in 0..8 {
                 let pos = Position::new(file, rank);
                 if let Some(piece) = self.board.get_piece(&pos) {
-                    if piece.color == color && piece.is_king() {
+                    if piece.color == color && piece.piece_type == PieceType::King {
                         king_pos = Some(pos);
                         break;
                     }
                 }
+            }
+            if king_pos.is_some() {
+                break;
             }
         }
         
@@ -89,51 +95,48 @@ impl Game {
             None => return true,
         };
         
-        // Check if the king's position is under attack
-        self.board.is_square_attacked(&king_pos, color.opposite())
+        // Check if any opponent piece can capture the king
+        // This is a simplified approach - just see if any legal move for the opponent
+        // can land on the king's position
+        let mut engine = Engine::new(1);  // Shallow depth for finding attacks
+        let opponent_color = color.opposite();
+        
+        if let Ok(moves) = engine.generate_moves(&self.board, opponent_color) {
+            for chess_move in moves {
+                if chess_move.to == king_pos {
+                    return true;
+                }
+            }
+        }
+        
+        false
     }
     
     // Update the game status (check, checkmate, stalemate, etc.)
     fn update_game_status(&mut self) {
-        let next_player = self.current_turn.opposite();
+        let current_player = self.current_turn;
         
-        if self.is_king_in_check(next_player) {
-            // Check if it's checkmate by verifying if any move can get out of check
-            if self.has_legal_moves(next_player) {
+        // Check if the current player is in check
+        let in_check = self.is_king_in_check(current_player);
+        
+        // Create a temporary engine to check for legal moves
+        let mut engine = Engine::new(1);
+        let has_legal_moves = match engine.generate_moves(&self.board, current_player) {
+            Ok(moves) => !moves.is_empty(),
+            Err(_) => false,
+        };
+        
+        // Update status based on check status and available moves
+        if in_check {
+            if has_legal_moves {
                 self.status = GameStatus::Check;
             } else {
                 self.status = GameStatus::Checkmate;
             }
-        } else if !self.has_legal_moves(next_player) {
+        } else if !has_legal_moves {
             self.status = GameStatus::Stalemate;
         } else {
             self.status = GameStatus::InProgress;
         }
-    }
-    
-    // Check if the given color has any legal moves
-    fn has_legal_moves(&self, color: Color) -> bool {
-        // Try all possible moves for all pieces of the given color
-        for from_rank in 0..8 {
-            for from_file in 0..8 {
-                let from = Position::new(from_file, from_rank);
-                if let Some(piece) = self.board.get_piece(&from) {
-                    if piece.color == color {
-                        // Try moving to every square
-                        for to_rank in 0..8 {
-                            for to_file in 0..8 {
-                                let to = Position::new(to_file, to_rank);
-                                // Clone the game and try the move
-                                let mut test_game = self.clone();
-                                if test_game.make_move(ChessMove::new(from, to)).is_ok() {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        false
     }
 }
